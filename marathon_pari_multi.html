@@ -1,0 +1,237 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Pari Marathon – Multi‑parieurs</title>
+<style>
+:root{--primary:#0056b3;--light:#f4f4f4;--border:#ccc;}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--light);display:flex;min-height:100vh;}
+header{background:var(--primary);color:#fff;padding:20px;text-align:center;width:100%;}
+main{display:flex;flex:1;padding:20px;gap:20px;flex-wrap:wrap;}
+.panel{background:#fff;border:1px solid var(--border);border-radius:10px;padding:20px;flex:1;min-width:260px;overflow:auto;}
+table{border-collapse:collapse;width:100%;background:#fff;}
+th,td{border:1px solid var(--border);padding:8px;text-align:center;font-size:14px;}
+tr.selected{background:#d9ebff;font-weight:bold;}
+h2{margin:0 0 10px 0;font-size:18px;}
+input[type=text],input[type=number],select,button{padding:6px;border:1px solid var(--border);border-radius:4px;font-size:14px;}
+button{cursor:pointer;background:var(--primary);color:#fff;}
+button.small{padding:4px 6px;font-size:12px;}
+button.danger{background:#b30000;}
+button.secondary{background:#888;}
+@media(max-width:900px){main{flex-direction:column;}}
+</style>
+</head>
+<body>
+<header><h1>Pariez sur le Marathon</h1></header>
+<main>
+
+  <!-- LEFT: Bets list -->
+  <div class="panel" style="flex:2;">
+    <h2>Paris enregistrés</h2>
+    <table id="bets-list">
+      <thead><tr><th>Parieur</th><th>Type</th><th>Détail</th><th>Mise (€)</th><th>Gain pot.</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- CENTER: Runners & type -->
+  <div class="panel" style="flex:2;">
+    <div style="margin-bottom:10px;">
+      <label for="bet-type"><strong>Type de pari :</strong></label>
+      <select id="bet-type">
+        <option value="Victoire">Victoire (ordre d'arrivée)</option>
+        <option value="Réussi objectif">Réussi son objectif</option>
+        <option value="Craquage +20 min">Craquage +20 minutes</option>
+        <option value="Vomito">Vomito</option>
+        <option value="Blessure">Blessure</option>
+        <option value="Objectif battu">Objectif battu</option>
+        <option value="Ordre">Ordre des arrivées exact</option>
+      </select>
+    </div>
+    <table id="runners-table">
+      <thead><tr><th>Nom</th><th>Cote</th><th>Choisir</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- RIGHT: Place / Edit bet -->
+  <div class="panel" style="flex:1;">
+    <h2 id="form-title">Placer un pari</h2>
+    <div class="flex-column">
+      <input type="text" id="bettor-name" placeholder="Nom du parieur" />
+      <div id="order-div" style="display:none;">
+        <input type="text" id="order-input" placeholder="Ordre d'arrivée (Antoine,Henri,...)" />
+      </div>
+      <div id="runner-div">Aucun coureur sélectionné</div>
+      <input type="number" id="stake" placeholder="Mise (€)" />
+      <div>Gain potentiel : <span id="payout">0</span> €</div>
+      <button id="place-btn" onclick="submitBet()">Valider</button>
+      <button class="secondary" onclick="resetForm()">Annuler</button>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const runners=['Antoine','Henri','Hugo','Lucien','Augustin'];
+const betTypeEl=document.getElementById('bet-type');
+const runnersTbody=document.querySelector('#runners-table tbody');
+const betsListTbody=document.querySelector('#bets-list tbody');
+const bettorInput=document.getElementById('bettor-name');
+const runnerDiv=document.getElementById('runner-div');
+const stakeInput=document.getElementById('stake');
+const payoutEl=document.getElementById('payout');
+const orderDiv=document.getElementById('order-div');
+const orderInput=document.getElementById('order-input');
+const formTitle=document.getElementById('form-title');
+const placeBtn=document.getElementById('place-btn');
+
+let bets=JSON.parse(localStorage.getItem('betsMultiData')||'[]'); // array of bet objects
+let selectedRunnerIdx=null;
+let editIndex=null; // index being edited
+
+// Build runners table rows
+runners.forEach((name,i)=>{
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td>${name}</td><td id="odds-${i}">-</td><td><button class="small" onclick="selectRunner(${i})">Choisir</button></td>`;
+  runnersTbody.appendChild(tr);
+});
+
+function computeOdds(type,runnerIdx){
+  const pool=bets.filter(b=>b.type===type&&b.type!=='Ordre').reduce((s,b)=>s+b.stake,0);
+  const stakeSum=bets.filter(b=>b.type===type&&b.runnerIdx===runnerIdx).reduce((s,b)=>s+b.stake,0);
+  return pool===0||stakeSum===0?0:(pool/stakeSum).toFixed(2);
+}
+
+function refreshOdds(){
+  const type=betTypeEl.value;
+  runners.forEach((_,i)=>{
+    document.getElementById('odds-'+i).textContent=(type==='Ordre')?'N/A':(computeOdds(type,i)||'-');
+  });
+}
+
+function refreshBetsList(){
+  betsListTbody.innerHTML='';
+  bets.forEach((b,idx)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${b.bettor}</td><td>${b.type}</td><td>${b.detail}</td>
+                  <td>${b.stake.toFixed(2)}</td><td>${b.payout}</td>
+                  <td>
+                    <button class="small" onclick="editBet(${idx})">Edit</button>
+                    <button class="small danger" onclick="deleteBet(${idx})">X</button>
+                  </td>`;
+    betsListTbody.appendChild(tr);
+  });
+}
+
+function selectRunner(i){
+  if(betTypeEl.value==='Ordre'){alert('Pas de coureur à sélectionner pour ce pari.');return;}
+  selectedRunnerIdx=i;
+  runnerDiv.textContent='Coureur : '+runners[i];
+  updatePayout();
+}
+
+function updatePayout(){
+  const stake=parseFloat(stakeInput.value);
+  const type=betTypeEl.value;
+  if(type==='Ordre'){payoutEl.textContent='N/A';return;}
+  if(isNaN(stake)||stake<=0||selectedRunnerIdx===null){payoutEl.textContent='0';return;}
+  const odds=computeOdds(type,selectedRunnerIdx)||0;
+  payoutEl.textContent=(stake*odds).toFixed(2);
+}
+
+stakeInput.addEventListener('input',updatePayout);
+betTypeEl.addEventListener('change',()=>{
+  refreshOdds();
+  resetForm();
+  if(betTypeEl.value==='Ordre'){
+    orderDiv.style.display='block';
+    runnerDiv.textContent='';
+  }else{
+    orderDiv.style.display='none';
+  }
+});
+
+function submitBet(){
+  const bettor=bettorInput.value.trim();
+  if(!bettor){alert('Indiquez le nom du parieur.');return;}
+  const type=betTypeEl.value;
+  if(type==='Ordre'){
+    const order=orderInput.value.trim();
+    if(order.split(',').length!==runners.length){alert('Ordre incomplet.');return;}
+    const record={bettor,type,detail:order,stake:0,payout:'N/A',runnerIdx:null};
+    if(editIndex!==null){bets[editIndex]=record;}
+    else{bets.push(record);}
+    saveAndRefresh();
+    resetForm();
+    return;
+  }
+  const stake=parseFloat(stakeInput.value);
+  if(isNaN(stake)||stake<=0){alert('Mise invalide.');return;}
+  if(selectedRunnerIdx===null){alert('Sélectionnez un coureur.');return;}
+  const odds=computeOdds(type,selectedRunnerIdx)||0;
+  const payout=(stake*odds).toFixed(2);
+  const detail=runners[selectedRunnerIdx];
+  const record={bettor,type,detail,stake,payout,runnerIdx:selectedRunnerIdx};
+  if(editIndex!==null){bets[editIndex]=record;}
+  else{bets.push(record);}
+  saveAndRefresh();
+  resetForm();
+}
+
+function editBet(idx){
+  const b=bets[idx];
+  editIndex=idx;
+  formTitle.textContent='Modifier le pari';
+  placeBtn.textContent='Mettre à jour';
+  bettorInput.value=b.bettor;
+  betTypeEl.value=b.type;
+  refreshOdds();
+  if(b.type==='Ordre'){
+    orderDiv.style.display='block';
+    orderInput.value=b.detail;
+    runnerDiv.textContent='';
+    stakeInput.value='';
+    payoutEl.textContent='N/A';
+    selectedRunnerIdx=null;
+  }else{
+    orderDiv.style.display='none';
+    orderInput.value='';
+    selectedRunnerIdx=b.runnerIdx;
+    runnerDiv.textContent='Coureur : '+b.detail;
+    stakeInput.value=b.stake;
+    updatePayout();
+  }
+}
+
+function deleteBet(idx){
+  if(confirm('Supprimer ce pari ?')){
+    bets.splice(idx,1);
+    saveAndRefresh();
+  }
+}
+
+function resetForm(){
+  formTitle.textContent='Placer un pari';
+  placeBtn.textContent='Valider';
+  bettorInput.value='';
+  stakeInput.value='';
+  payoutEl.textContent='0';
+  orderInput.value='';
+  runnerDiv.textContent='Aucun coureur sélectionné';
+  selectedRunnerIdx=null;
+  editIndex=null;
+}
+
+function saveAndRefresh(){
+  localStorage.setItem('betsMultiData',JSON.stringify(bets));
+  refreshOdds();
+  refreshBetsList();
+}
+
+refreshOdds();
+refreshBetsList();
+</script>
+</body>
+</html>
